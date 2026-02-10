@@ -1,228 +1,32 @@
-name: Sync Dashboards to Grafana
+name: Sync Grafana Dashboards
 
 on:
   push:
-    branches: [ main, master ]
-    paths:
-      - '**.json'
-      - '.github/workflows/sync-grafana.yml'
-  pull_request:
-    branches: [ main, master ]
-    paths:
-      - '**.json'
-  workflow_dispatch:  # Allow manual trigger
-    inputs:
-      dashboard_file:
-        description: 'Specific dashboard file to sync (optional)'
-        required: false
-        default: ''
+    branches: [ main ]
+    paths: [ '**.json' ]
 
 jobs:
-  validate-and-sync:
+  sync:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout repository
+    - name: Checkout
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 0  # Fetch all history for proper diff
-    
-    - name: Setup Node.js (for JSON validation)
-      uses: actions/setup-node@v4
-      with:
-        node-version: '18'
-    
-    - name: Find changed JSON files
-      id: changed-files
-      uses: tj-actions/changed-files@v44
-      with:
-        files: |
-          **/*.json
-        files_ignore: |
-          node_modules/**/*
-          .github/**/*
-    
-    - name: Validate JSON files
-      if: steps.changed-files.outputs.any_changed == 'true'
-      run: |
-        echo "Changed JSON files: ${{ steps.changed-files.outputs.all_changed_files }}"
-        
-        # Validate each changed JSON file
-        for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
-          echo "🔍 Validating: $file"
-          
-          # Check if file exists
-          if [ ! -f "$file" ]; then
-            echo "❌ File not found: $file"
-            exit 1
-          fi
-          
-          # Validate JSON syntax
-          if ! jq empty "$file" 2>/dev/null; then
-            echo "❌ Invalid JSON in: $file"
-            exit 1
-          fi
-          
-          # Check for required dashboard structure
-          if ! jq '.dashboard' "$file" > /dev/null 2>&1; then
-            echo "⚠ Warning: $file doesn't have a dashboard object"
-            echo "Attempting to wrap it in dashboard object..."
-          fi
-          
-          echo "✅ $file is valid JSON"
-        done
-        
-        echo "🎉 All JSON files validated successfully!"
-    
-    - name: Install jq (JSON processor)
-      if: steps.changed-files.outputs.any_changed == 'true'
-      run: sudo apt-get update && sudo apt-get install -y jq
-    
-    - name: Sync to Grafana
-      if: steps.changed-files.outputs.any_changed == 'true' && github.event_name != 'pull_request'
+      
+    - name: Install tools
+      run: sudo apt-get update && sudo apt-get install -y curl jq
+      
+    - name: Sync Dashboards
       env:
         GRAFANA_URL: ${{ secrets.GRAFANA_URL }}
         GRAFANA_TOKEN: ${{ secrets.GRAFANA_API_TOKEN }}
-        GRAFANA_FOLDER_UID: ${{ secrets.GRAFANA_FOLDER_UID }}
       run: |
-        echo "🚀 Starting Grafana dashboard sync..."
-        
-        # Create a summary file
-        SUMMARY_FILE="sync-summary.md"
-        echo "# Grafana Sync Summary" > $SUMMARY_FILE
-        echo "**Date:** $(date)" >> $SUMMARY_FILE
-        echo "**Triggered by:** ${{ github.actor }}" >> $SUMMARY_FILE
-        echo "" >> $SUMMARY_FILE
-        echo "## Results" >> $SUMMARY_FILE
-        
-        SUCCESS_COUNT=0
-        FAILURE_COUNT=0
-        
-        # Process each changed JSON file
-        for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
-          echo ""
-          echo "📤 Processing: $file"
-          
-          # Extract dashboard UID and title
-          DASHBOARD_UID=$(jq -r '.dashboard.uid // .uid // ""' "$file" 2>/dev/null)
-          DASHBOARD_TITLE=$(jq -r '.dashboard.title // .title // ""' "$file" 2>/dev/null)
-          
-          if [ -z "$DASHBOARD_UID" ] && [ -n "$DASHBOARD_TITLE" ]; then
-            # Generate UID from title if not present
-            DASHBOARD_UID=$(echo "$DASHBOARD_TITLE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/-\+/-/g' | sed 's/^-//;s/-$//')
-            echo "ℹ️  Generated UID from title: $DASHBOARD_UID"
-          fi
-          
-          if [ -z "$DASHBOARD_UID" ]; then
-            echo "❌ Skipping: No UID found in $file"
-            echo "- ❌ **$file**: Failed - No UID found" >> $SUMMARY_FILE
-            FAILURE_COUNT=$((FAILURE_COUNT + 1))
-            continue
-          fi
-          
-          # Prepare the payload
-          PAYLOAD_TEMP=$(mktemp)
-          
-          # Check if file already has proper structure
-          if jq '.dashboard' "$file" > /dev/null 2>&1; then
-            # File has dashboard object
-            jq --argjson overwrite true --arg message "Updated via GitHub Actions - ${{ github.sha }}" \
-               '. + {overwrite: $overwrite, message: $message}' "$file" > "$PAYLOAD_TEMP"
-          else
-            # Wrap in dashboard object
-            jq --argjson overwrite true --arg message "Updated via GitHub Actions - ${{ github.sha }}" \
-               '{dashboard: ., overwrite: $overwrite, message: $message}' "$file" > "$PAYLOAD_TEMP"
-          fi
-          
-          # Add folderUid if provided
-          if [ -n "$GRAFANA_FOLDER_UID" ]; then
-            jq --arg folderUid "$GRAFANA_FOLDER_UID" '.dashboard.folderUid = $folderUid' "$PAYLOAD_TEMP" > "${PAYLOAD_TEMP}.tmp" && mv "${PAYLOAD_TEMP}.tmp" "$PAYLOAD_TEMP"
-          fi
-          
-          # Ensure UID is set
-          jq --arg uid "$DASHBOARD_UID" '.dashboard.uid = $uid' "$PAYLOAD_TEMP" > "${PAYLOAD_TEMP}.tmp" && mv "${PAYLOAD_TEMP}.tmp" "$PAYLOAD_TEMP"
-          
-          echo "📊 Dashboard: $DASHBOARD_TITLE (UID: $DASHBOARD_UID)"
-          
-          # Send to Grafana
-          RESPONSE=$(curl -s -w "\n%{http_code}" \
-            -X POST \
+        for file in *.json; do
+          echo "Syncing $file"
+          curl -X POST \
             -H "Authorization: Bearer $GRAFANA_TOKEN" \
             -H "Content-Type: application/json" \
-            -H "Accept: application/json" \
-            --data-binary @"$PAYLOAD_TEMP" \
-            "$GRAFANA_URL/api/dashboards/db")
-          
-          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-          RESPONSE_BODY=$(echo "$RESPONSE" | sed '$d')
-          
-          if [ "$HTTP_CODE" = "200" ]; then
-            echo "✅ Successfully synced: $DASHBOARD_TITLE"
-            echo "- ✅ **$DASHBOARD_TITLE**: Synced successfully" >> $SUMMARY_FILE
-            SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-          else
-            ERROR_MSG=$(echo "$RESPONSE_BODY" | jq -r '.message // .error // "Unknown error"' 2>/dev/null || echo "$RESPONSE_BODY")
-            echo "❌ Failed to sync: $ERROR_MSG (HTTP $HTTP_CODE)"
-            echo "- ❌ **$DASHBOARD_TITLE**: Failed - $ERROR_MSG" >> $SUMMARY_FILE
-            FAILURE_COUNT=$((FAILURE_COUNT + 1))
-          fi
-          
-          rm -f "$PAYLOAD_TEMP"
+            --data-binary @$file \
+            "$GRAFANA_URL/api/dashboards/db" || true
+          echo ""
         done
-        
-        echo "" >> $SUMMARY_FILE
-        echo "## Summary" >> $SUMMARY_FILE
-        echo "✅ Successfully synced: $SUCCESS_COUNT" >> $SUMMARY_FILE
-        echo "❌ Failed: $FAILURE_COUNT" >> $SUMMARY_FILE
-        
-        # Set job summary
-        cat $SUMMARY_FILE >> $GITHUB_STEP_SUMMARY
-        
-        # Fail if any dashboard failed to sync
-        if [ $FAILURE_COUNT -gt 0 ]; then
-          echo "❌ Some dashboards failed to sync"
-          exit 1
-        fi
-        
-        echo "🎉 All dashboards synced successfully!"
-    
-    - name: Send Notification (Optional)
-      if: always()
-      uses: 8398a7/action-slack@v3
-      with:
-        status: ${{ job.status }}
-        channel: '#grafana-alerts'
-        username: 'Grafana Sync Bot'
-      env:
-        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-
-  validation-only:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-    
-    - name: Validate JSON files
-      run: |
-        echo "🔍 Validating all JSON files in PR..."
-        
-        # Find all JSON files
-        JSON_FILES=$(find . -name "*.json" -not -path "./.github/*" -not -path "./node_modules/*")
-        
-        if [ -z "$JSON_FILES" ]; then
-          echo "⚠ No JSON files found to validate"
-          exit 0
-        fi
-        
-        for file in $JSON_FILES; do
-          echo "Validating: $file"
-          if ! jq empty "$file" 2>/dev/null; then
-            echo "❌ Invalid JSON in: $file"
-            exit 1
-          fi
-          echo "✅ $file is valid JSON"
-        done
-        
-        echo "🎉 All JSON files are valid!"

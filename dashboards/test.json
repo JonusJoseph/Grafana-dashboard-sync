@@ -1,0 +1,26 @@
+{
+  "dashboard": {
+    "uid": "jenkins-test",
+    "title": "Jenkins Monitoring Dashboard",
+    "tags": ["jenkins", "monitoring"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "type": "stat",
+        "title": "Jenkins Health Score",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+        "targets": [
+          {
+            "expr": "jenkins_health_check_score",
+            "refId": "A"
+          }
+        ]
+      }
+    ],
+    "schemaVersion": 27,
+    "version": 0
+  },
+  "overwrite": true,
+  "message": "Created via Jenkins sync"
+}

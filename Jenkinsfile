@@ -2,7 +2,7 @@ pipeline {
     agent any
     
     environment {
-        GRAFANA_URL = 'http://localhost:3000'  // Local Grafana Docker
+        GRAFANA_URL = 'http://192.168.226.139:3000'  // Local Grafana Docker
         GRAFANA_TOKEN = credentials('grafana-api-token')
     }
     

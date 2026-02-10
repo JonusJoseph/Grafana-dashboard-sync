@@ -1,26 +1,87 @@
 {
   "dashboard": {
-    "uid": "jenkins-test",
-    "title": "Jenkins Monitoring Dashboard",
-    "tags": ["jenkins", "monitoring"],
+    "uid": "test-health-dashboard",
+    "title": "Health Check Dashboard",
+    "tags": ["test", "health", "jenkins"],
     "timezone": "browser",
     "panels": [
       {
         "id": 1,
         "type": "stat",
-        "title": "Jenkins Health Score",
-        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+        "title": "System Status",
+        "description": "Simple health check panel",
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 0
+        },
         "targets": [
           {
-            "expr": "jenkins_health_check_score",
+            "expr": "1",
+            "legendFormat": "UP",
             "refId": "A"
           }
-        ]
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "mappings": [],
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "color": "green",
+                  "value": null
+                },
+                {
+                  "color": "red",
+                  "value": 0
+                }
+              ]
+            },
+            "unit": "short"
+          },
+          "overrides": []
+        },
+        "options": {
+          "colorMode": "value",
+          "graphMode": "area",
+          "justifyMode": "auto",
+          "orientation": "auto",
+          "reduceOptions": {
+            "calcs": [
+              "lastNotNull"
+            ],
+            "fields": "",
+            "values": false
+          },
+          "text": {},
+          "textMode": "auto"
+        }
+      },
+      {
+        "id": 2,
+        "type": "text",
+        "title": "Test Info",
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 0
+        },
+        "options": {
+          "mode": "markdown",
+          "content": "# Jenkins Sync Test\n\n✅ Dashboard synced successfully via Jenkins\n\n**Details:**\n- Created: $(date)\n- Source: GitHub → Jenkins → Grafana\n- Status: Working"
+        }
       }
     ],
-    "schemaVersion": 27,
-    "version": 0
+    "schemaVersion": 16,
+    "version": 0,
+    "refresh": "30s"
   },
   "overwrite": true,
-  "message": "Created via Jenkins sync"
+  "message": "Created via Jenkins sync for testing"
 }

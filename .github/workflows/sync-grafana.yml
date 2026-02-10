@@ -1,297 +1,44 @@
-name: Sync Grafana Dashboards
+name: Sync Grafana
 
 on:
   push:
-    branches: [ main, master ]
-    paths:
-      - '**.json'
+    branches: [ main ]
+    paths: [ '**.json' ]
   workflow_dispatch:
 
 jobs:
-  sync-dashboards:
+  sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 5  # Set explicit timeout
     
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
     
-    - name: Debug - Show environment
-      run: |
-        echo "=== DEBUG INFORMATION ==="
-        echo "GitHub Actor: ${{ github.actor }}"
-        echo "Repository: ${{ github.repository }}"
-        echo "Event: ${{ github.event_name }}"
-        
-        # Check if secrets exist (without revealing values)
-        echo "GRAFANA_URL secret exists: ${{ secrets.GRAFANA_URL != '' }}"
-        echo "GRAFANA_TOKEN secret exists: ${{ secrets.GRAFANA_API_TOKEN != '' }}"
-        
-        # Show first few chars of URL for debugging (not full URL for security)
-        if [ -n "${{ secrets.GRAFANA_URL }}" ]; then
-          GRAFANA_URL="${{ secrets.GRAFANA_URL }}"
-          echo "GRAFANA_URL starts with: ${GRAFANA_URL:0:20}..."
-          echo "GRAFANA_URL length: ${#GRAFANA_URL}"
-        fi
+    - name: Setup
+      run: sudo apt-get update && sudo apt-get install -y curl jq
     
-    - name: Network connectivity test
+    - name: Test Connection
       env:
-        GRAFANA_URL: ${{ secrets.GRAFANA_URL }}
+        URL: ${{ secrets.GRAFANA_URL }}
+        TOKEN: ${{ secrets.GRAFANA_API_TOKEN }}
       run: |
-        echo "=== NETWORK TEST ==="
-        
-        if [ -z "$GRAFANA_URL" ]; then
-          echo "❌ ERROR: GRAFANA_URL is empty!"
-          echo "Please set GRAFANA_URL secret in repository settings"
+        echo "Testing Grafana at: $URL"
+        if curl -s -H "Authorization: Bearer $TOKEN" "$URL/api/health" | grep -q "ok"; then
+          echo "✅ Connected"
+        else
+          echo "❌ Cannot connect"
           exit 1
         fi
-        
-        # Extract hostname from URL
-        HOSTNAME=$(echo "$GRAFANA_URL" | sed -e 's|^[^/]*//||' -e 's|/.*$||')
-        echo "Testing connectivity to: $HOSTNAME"
-        
-        # Test DNS resolution
-        echo "1. Testing DNS resolution..."
-        if nslookup "$HOSTNAME" > /dev/null 2>&1; then
-          echo "   ✅ DNS resolution successful"
-        else
-          echo "   ❌ DNS resolution failed"
-        fi
-        
-        # Test network connectivity (without port)
-        echo "2. Testing basic connectivity..."
-        if ping -c 2 -W 2 "$HOSTNAME" > /dev/null 2>&1; then
-          echo "   ✅ Basic connectivity OK"
-        else
-          echo "   ⚠️  Ping failed (may be blocked)"
-        fi
-        
-        # Extract port (default to 443 for https, 80 for http)
-        PORT=443
-        if [[ "$GRAFANA_URL" == http://* ]]; then
-          PORT=80
-        fi
-        
-        # Test port connectivity with timeout
-        echo "3. Testing port $PORT connectivity (5 second timeout)..."
-        if timeout 5 bash -c "echo > /dev/tcp/$HOSTNAME/$PORT" 2>/dev/null; then
-          echo "   ✅ Port $PORT is accessible"
-        else
-          echo "   ❌ Cannot connect to port $PORT"
-          echo "   Make sure Grafana is running and accessible from the internet"
-          echo "   If using local Grafana, you need to make it publicly accessible"
-        fi
-        
-        # Test Grafana API health endpoint
-        echo "4. Testing Grafana API endpoint..."
-        echo "   URL: $GRAFANA_URL/api/health"
-        
-        # Use curl with shorter timeout
-        API_RESPONSE=$(timeout 10 curl -s -w "\nHTTP_CODE:%{http_code}" "$GRAFANA_URL/api/health" 2>/dev/null || echo "CURL_FAILED")
-        
-        if [[ "$API_RESPONSE" == *"CURL_FAILED"* ]]; then
-          echo "   ❌ Curl failed to connect (timeout or connection refused)"
-        else
-          HTTP_CODE=$(echo "$API_RESPONSE" | grep "HTTP_CODE:" | cut -d: -f2)
-          RESPONSE_BODY=$(echo "$API_RESPONSE" | sed '/HTTP_CODE:/d')
-          
-          if [ "$HTTP_CODE" = "200" ]; then
-            echo "   ✅ Grafana API is accessible (HTTP 200)"
-            echo "   Response: $RESPONSE_BODY"
-          else
-            echo "   ⚠️  Grafana returned HTTP $HTTP_CODE"
-            echo "   Response: $RESPONSE_BODY"
-          fi
-        fi
-        
-        echo ""
-        echo "=== CONFIGURATION CHECKLIST ==="
-        echo "1. ✅ GRAFANA_URL is set: $([[ -n "$GRAFANA_URL" ]] && echo "Yes" || echo "No")"
-        echo "2. ✅ GRAFANA_URL format: $GRAFANA_URL"
-        echo "3. ❓ Is Grafana publicly accessible? (Required for GitHub-hosted runners)"
-        echo "4. ❓ Are ports open (3000/80/443)?"
-        echo "5. ❓ Is there a firewall blocking connections?"
     
-    - name: Validate JSON files (quick check)
-      run: |
-        echo "=== JSON VALIDATION ==="
-        
-        # Count JSON files
-        JSON_COUNT=$(find . -name "*.json" -not -path "./.github/*" 2>/dev/null | wc -l)
-        echo "Found $JSON_COUNT JSON file(s)"
-        
-        if [ "$JSON_COUNT" -eq 0 ]; then
-          echo "⚠️  No JSON files found. Creating a test dashboard..."
-          
-          # Create a simple test dashboard
-          cat > test-dashboard.json << 'EOF'
-{
-  "dashboard": {
-    "uid": "github-action-test",
-    "title": "GitHub Action Test Dashboard",
-    "tags": ["test", "github-actions"],
-    "timezone": "browser",
-    "panels": [],
-    "schemaVersion": 16,
-    "version": 0
-  },
-  "overwrite": true,
-  "message": "Created by GitHub Actions for testing"
-}
-EOF
-          echo "✅ Created test-dashboard.json"
-        fi
-        
-        # Validate each JSON file
-        for file in $(find . -name "*.json" -not -path "./.github/*"); do
-          echo "Validating: $(basename "$file")"
-          if jq empty "$file" 2>/dev/null; then
-            echo "  ✅ Valid JSON"
-          else
-            echo "  ❌ Invalid JSON"
-            # Show error
-            jq empty "$file" 2>&1 | head -5
-          fi
-        done
-    
-    - name: Install required tools
-      run: |
-        echo "=== INSTALLING TOOLS ==="
-        sudo apt-get update
-        sudo apt-get install -y curl jq
-        echo "curl version: $(curl --version | head -1)"
-        echo "jq version: $(jq --version)"
-    
-    - name: Sync dashboards to Grafana
+    - name: Sync Dashboards
       env:
-        GRAFANA_URL: ${{ secrets.GRAFANA_URL }}
-        GRAFANA_TOKEN: ${{ secrets.GRAFANA_API_TOKEN }}
+        URL: ${{ secrets.GRAFANA_URL }}
+        TOKEN: ${{ secrets.GRAFANA_API_TOKEN }}
       run: |
-        echo "=== STARTING GRAFANA SYNC ==="
-        
-        if [ -z "$GRAFANA_TOKEN" ]; then
-          echo "❌ ERROR: GRAFANA_API_TOKEN secret is not set!"
-          echo "Please add GRAFANA_API_TOKEN to repository secrets"
-          exit 1
-        fi
-        
-        echo "Using Grafana URL: $GRAFANA_URL"
-        echo "Token length: ${#GRAFANA_TOKEN} characters"
-        
-        # Find JSON files
-        JSON_FILES=$(find . -name "*.json" -not -path "./.github/*")
-        
-        if [ -z "$JSON_FILES" ]; then
-          echo "ℹ️ No JSON files found. Nothing to sync."
-          exit 0
-        fi
-        
-        echo "Found $(echo "$JSON_FILES" | wc -l) dashboard file(s)"
-        
-        SUCCESS=0
-        FAILED=0
-        
-        for file in $JSON_FILES; do
-          echo ""
-          echo "📤 Processing: $(basename "$file")"
-          
-          # Get dashboard info
-          TITLE=$(jq -r '.dashboard.title // .title // "Untitled Dashboard"' "$file" 2>/dev/null || echo "Unknown")
-          UID=$(jq -r '.dashboard.uid // .uid // ""' "$file" 2>/dev/null || echo "")
-          
-          echo "  Title: $TITLE"
-          echo "  UID: ${UID:-'(not set)'}"
-          
-          # Create payload
-          TEMP_FILE=$(mktemp)
-          
-          # Prepare payload with timeout settings
-          PAYLOAD=$(cat <<EOF
-{
-  "dashboard": $(cat "$file"),
-  "overwrite": true,
-  "message": "Synced via GitHub Actions at $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-}
-EOF
-          )
-          
-          echo "$PAYLOAD" > "$TEMP_FILE"
-          
-          # Validate payload
-          if ! jq empty "$TEMP_FILE" 2>/dev/null; then
-            echo "  ❌ Failed to create valid payload"
-            FAILED=$((FAILED + 1))
-            rm -f "$TEMP_FILE"
-            continue
-          fi
-          
-          # Send to Grafana with timeout and detailed output
-          echo "  Sending to Grafana (10 second timeout)..."
-          
-          set +e  # Don't exit on curl errors
-          
-          RESPONSE=$(timeout 10 curl -v -s \
-            -X POST \
-            -H "Authorization: Bearer $GRAFANA_TOKEN" \
+        for file in *.json; do
+          echo "Syncing $file"
+          curl -X POST \
+            -H "Authorization: Bearer $TOKEN" \
             -H "Content-Type: application/json" \
-            -H "Accept: application/json" \
-            --data-binary @"$TEMP_FILE" \
-            --max-time 10 \
-            --connect-timeout 5 \
-            -w "\nHTTP_CODE:%{http_code}\nTIME_TOTAL:%{time_total}" \
-            "$GRAFANA_URL/api/dashboards/db" 2>&1)
-          
-          CURL_EXIT=$?
-          set -e
-          
-          # Extract info from response
-          HTTP_CODE=$(echo "$RESPONSE" | grep "HTTP_CODE:" | cut -d: -f2)
-          TIME_TOTAL=$(echo "$RESPONSE" | grep "TIME_TOTAL:" | cut -d: -f2)
-          
-          # Clean response for display
-          CLEAN_RESPONSE=$(echo "$RESPONSE" | sed '/HTTP_CODE:/d' | sed '/TIME_TOTAL:/d' | tail -5)
-          
-          echo "  Time taken: ${TIME_TOTAL}s"
-          
-          if [ $CURL_EXIT -eq 124 ] || [ $CURL_EXIT -eq 28 ]; then
-            echo "  ❌ Timeout (exit code $CURL_EXIT)"
-            echo "  This means GitHub Actions cannot reach your Grafana instance"
-            FAILED=$((FAILED + 1))
-          elif [ "$HTTP_CODE" = "200" ]; then
-            echo "  ✅ Success! (HTTP $HTTP_CODE)"
-            SUCCESS=$((SUCCESS + 1))
-          elif [ -n "$HTTP_CODE" ]; then
-            ERROR_MSG=$(echo "$CLEAN_RESPONSE" | jq -r '.message // .error // "Unknown error"' 2>/dev/null || echo "$CLEAN_RESPONSE")
-            echo "  ❌ Failed with HTTP $HTTP_CODE: $ERROR_MSG"
-            FAILED=$((FAILED + 1))
-          else
-            echo "  ❌ Connection failed (curl exit: $CURL_EXIT)"
-            echo "  Response: $CLEAN_RESPONSE"
-            FAILED=$((FAILED + 1))
-          fi
-          
-          rm -f "$TEMP_FILE"
+            --data-binary @$file \
+            "$URL/api/dashboards/db" && echo "✅ Done" || echo "❌ Failed"
         done
-        
-        echo ""
-        echo "=== FINAL SUMMARY ==="
-        echo "✅ Successfully synced: $SUCCESS"
-        echo "❌ Failed: $FAILED"
-        echo ""
-        
-        if [ $FAILED -gt 0 ]; then
-          echo "❌ Some dashboards failed to sync"
-          echo ""
-          echo "=== TROUBLESHOOTING TIPS ==="
-          echo "1. Check if Grafana is running: $GRAFANA_URL"
-          echo "2. Verify API token has Admin/Editor permissions"
-          echo "3. Ensure Grafana is publicly accessible (GitHub runners are in the cloud)"
-          echo "4. Check firewall/security group rules"
-          echo "5. For local Grafana, use ngrok or expose it publicly"
-          exit 1
-        elif [ $SUCCESS -eq 0 ]; then
-          echo "⚠️  No dashboards were processed"
-          exit 0
-        else
-          echo "🎉 All dashboards synced successfully!"
-        fi

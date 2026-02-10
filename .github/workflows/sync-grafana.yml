@@ -2,31 +2,129 @@ name: Sync Grafana Dashboards
 
 on:
   push:
-    branches: [ main ]
-    paths: [ '**.json' ]
+    branches: [ main, master ]
+    paths:
+      - '**.json'
+  workflow_dispatch:  # Allows manual trigger from GitHub UI
 
 jobs:
-  sync:
+  sync-dashboards:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout
+    - name: Checkout code
       uses: actions/checkout@v4
-      
-    - name: Install tools
-      run: sudo apt-get update && sudo apt-get install -y curl jq
-      
-    - name: Sync Dashboards
+      with:
+        fetch-depth: 0
+    
+    - name: Setup environment
+      run: |
+        echo "🎯 Starting Grafana Dashboard Sync"
+        echo "Repository: ${{ github.repository }}"
+        echo "Triggered by: ${{ github.actor }}"
+        echo "Commit: ${{ github.sha }}"
+    
+    - name: Install required tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y curl jq
+    
+    - name: Validate JSON files
+      run: |
+        echo "🔍 Validating JSON files..."
+        
+        # Find all JSON files
+        JSON_FILES=$(find . -name "*.json" -not -path "./.github/*" -not -path "./node_modules/*" | head -20)
+        
+        if [ -z "$JSON_FILES" ]; then
+          echo "ℹ️ No JSON files found"
+          exit 0
+        fi
+        
+        echo "Found $(echo "$JSON_FILES" | wc -l) JSON file(s)"
+        
+        # Validate each file
+        for file in $JSON_FILES; do
+          echo "Checking: $file"
+          if jq empty "$file" 2>/dev/null; then
+            echo "  ✅ Valid JSON"
+          else
+            echo "  ❌ Invalid JSON"
+            exit 1
+          fi
+        done
+        
+        echo "✅ All JSON files are valid"
+    
+    - name: Sync dashboards to Grafana
       env:
         GRAFANA_URL: ${{ secrets.GRAFANA_URL }}
         GRAFANA_TOKEN: ${{ secrets.GRAFANA_API_TOKEN }}
       run: |
-        for file in *.json; do
-          echo "Syncing $file"
-          curl -X POST \
+        echo "🚀 Starting Grafana sync..."
+        
+        # Find JSON files
+        JSON_FILES=$(find . -name "*.json" -not -path "./.github/*" -not -path "./node_modules/*")
+        
+        if [ -z "$JSON_FILES" ]; then
+          echo "ℹ️ No JSON files to sync"
+          exit 0
+        fi
+        
+        SUCCESS=0
+        FAILED=0
+        
+        for file in $JSON_FILES; do
+          echo ""
+          echo "📤 Processing: $(basename "$file")"
+          
+          # Get dashboard title
+          TITLE=$(jq -r '.dashboard.title // .title // "Untitled Dashboard"' "$file" 2>/dev/null || echo "Unknown")
+          echo "  Title: $TITLE"
+          
+          # Create temporary file for payload
+          TEMP_FILE=$(mktemp)
+          
+          # Prepare the payload
+          if jq -e '.dashboard' "$file" > /dev/null 2>&1; then
+            # File already has dashboard wrapper
+            jq '. + {overwrite: true, message: "Updated via GitHub Actions"}' "$file" > "$TEMP_FILE"
+          else
+            # Wrap in dashboard object
+            jq '{dashboard: ., overwrite: true, message: "Updated via GitHub Actions"}' "$file" > "$TEMP_FILE"
+          fi
+          
+          # Send to Grafana
+          echo "  Sending to Grafana..."
+          HTTP_CODE=$(curl -s -o /tmp/response.json -w "%{http_code}" \
+            -X POST \
             -H "Authorization: Bearer $GRAFANA_TOKEN" \
             -H "Content-Type: application/json" \
-            --data-binary @$file \
-            "$GRAFANA_URL/api/dashboards/db" || true
-          echo ""
+            --data-binary @"$TEMP_FILE" \
+            "$GRAFANA_URL/api/dashboards/db")
+          
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "  ✅ Success!"
+            SUCCESS=$((SUCCESS + 1))
+          else
+            ERROR_MSG=$(jq -r '.message // .error // "Unknown error"' /tmp/response.json 2>/dev/null || echo "HTTP $HTTP_CODE")
+            echo "  ❌ Failed: $ERROR_MSG"
+            FAILED=$((FAILED + 1))
+          fi
+          
+          # Cleanup
+          rm -f "$TEMP_FILE" /tmp/response.json
         done
+        
+        echo ""
+        echo "📊 Summary:"
+        echo "  ✅ Successfully synced: $SUCCESS"
+        echo "  ❌ Failed: $FAILED"
+        echo ""
+        
+        if [ $FAILED -gt 0 ]; then
+          echo "❌ Some dashboards failed to sync"
+          exit 1
+        else
+          echo "🎉 All dashboards synced successfully!"
+        fi

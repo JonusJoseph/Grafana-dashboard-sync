@@ -1,10 +1,9 @@
-name: Sync Grafana
+name: Sync to Grafana
 
 on:
   push:
     branches: [ main ]
     paths: [ '**.json' ]
-  workflow_dispatch:
 
 jobs:
   sync:
@@ -13,27 +12,14 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
-    - name: Setup
-      run: sudo apt-get update && sudo apt-get install -y curl jq
-    
-    - name: Test Connection
+    - name: Sync dashboards
       env:
         URL: ${{ secrets.GRAFANA_URL }}
         TOKEN: ${{ secrets.GRAFANA_API_TOKEN }}
       run: |
-        echo "Testing Grafana at: $URL"
-        if curl -s -H "Authorization: Bearer $TOKEN" "$URL/api/health" | grep -q "ok"; then
-          echo "✅ Connected"
-        else
-          echo "❌ Cannot connect"
-          exit 1
-        fi
-    
-    - name: Sync Dashboards
-      env:
-        URL: ${{ secrets.GRAFANA_URL }}
-        TOKEN: ${{ secrets.GRAFANA_API_TOKEN }}
-      run: |
+        # Install curl if needed
+        command -v curl >/dev/null || sudo apt-get update && sudo apt-get install -y curl
+        
         for file in *.json; do
           echo "Syncing $file"
           curl -X POST \

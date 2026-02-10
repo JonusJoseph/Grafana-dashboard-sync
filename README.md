@@ -1,2 +1,2 @@
 # Grafana-dashboard-sync
-GitOps-style Grafana dashboard deployment 
+Github --> Jenkins --> Prometheus --> Grafana

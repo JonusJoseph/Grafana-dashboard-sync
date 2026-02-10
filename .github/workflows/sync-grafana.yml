@@ -1,35 +1,39 @@
 name: Test Grafana Sync (Mock)
 
-on: workflow_dispatch
+on:
+  workflow_dispatch:
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    
+
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-    
-    - name: Create test dashboard
-      run: |
-        cat > test-dashboard.json << 'EOF'
-{
-  "dashboard": {
-    "uid": "local-test",
-    "title": "Local Test Dashboard",
-    "panels": [],
-    "schemaVersion": 16
-  }
-}
-EOF
-    
-    - name: Validate workflow (without actual sync)
-      run: |
-        echo "✅ Workflow structure is valid"
-        echo "✅ JSON files can be created"
-        echo "✅ Ready for actual Grafana connection"
-        echo ""
-        echo "NEXT STEPS:"
-        echo "1. Make Grafana publicly accessible"
-        echo "2. Set GRAFANA_URL and GRAFANA_API_TOKEN secrets"
-        echo "3. Run the actual sync workflow"
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create test dashboard JSON
+        run: |
+          cat << 'EOF' > test-dashboard.json
+          {
+            "dashboard": {
+              "uid": "local-test",
+              "title": "Local Test Dashboard",
+              "panels": [],
+              "schemaVersion": 16
+            }
+          }
+          EOF
+
+      - name: Validate workflow (without actual sync)
+        run: |
+          echo "✅ Workflow structure is valid"
+          echo "✅ JSON file created successfully"
+          echo "✅ Ready for actual Grafana connection"
+          echo ""
+          echo "NEXT STEPS:"
+          echo "1. Make Grafana publicly accessible OR reachable from runner"
+          echo "2. Add GitHub Secrets:"
+          echo "   - GRAFANA_URL"
+          echo "   - GRAFANA_API_TOKEN"
+          echo "3. Run the real sync workflow"
